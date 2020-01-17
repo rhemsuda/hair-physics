@@ -4,7 +4,6 @@ Realistic simulation of hair physics optimized for virtual reality (120FPS). Lev
 ### How to run
 1. Open the Build folder
 2. Click on HairSimulator.exe
-3. If it doesn't work, feel free to watch the video :) System requirements could make it laggy depending on the computer's graphics card
 
 ### Description
 This simulator was a huge learning experience for me and turned out to be a great research assignment along with its success. My goal was to create hair that could be interacted with on a strand by strand level. This project was to be optimized for VR as it was a side-project of the NDI EM-VR project. 
