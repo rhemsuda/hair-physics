@@ -1,0 +1,103 @@
+﻿//File Name: HairPhysics.compute
+//Description: This is the compute shader to calculate the positions of all the hair bodies in parallel.
+//Programmer: Kyle Jensen
+//Revision Date: February 3, 2018
+
+#pragma kernel CSMain
+
+//Hair strand data. Uses Objects of Arrays pattern because C# limits fixed-length
+//arrays to the unsafe space and restricts the use of custom objects.
+struct HairStrand
+{
+	float accelX[50];
+	float accelY[50];
+	float accelZ[50];
+	float velX[50];
+	float velY[50];
+	float velZ[50];
+	float posX[50];
+	float posY[50];
+	float posZ[50];
+};
+
+struct StrandData
+{
+	float3 anchor;
+	int length;
+};
+
+//Input declarations
+float TimeDelta;
+float Mass;
+float SpringLength;
+float Stiffness;
+float Dampening;
+float3 Gravity;
+
+StructuredBuffer<StrandData> Varying;
+
+//Read from the read buffer and write to the write buffer, the C# code will swap these
+//After every dispatch so we are never using the values while we are changing them.
+//Since the tasks are parallel we have no way of guarunteeing any order in the execution,
+//and since each body is reliant on the bodies around it, this needs to be done.
+StructuredBuffer<HairStrand> ReadBuf;
+RWStructuredBuffer<HairStrand> WriteBuf;
+
+//Run a maximum of 64 threads for each dispatch in the X dimension. 
+//Hair length is restricted to 50 so 14 threads are never used.
+[numthreads(64,1,1)]
+void CSMain(int3 threadID : SV_GroupThreadID, int3 groupID : SV_GroupID)
+{
+	if (threadID.x < Varying[groupID.x].length)
+	{
+		//Get the current acceleration, velocity, and position from the read buffer
+		float3 acceleration = float3(ReadBuf[groupID.x].accelX[threadID.x], ReadBuf[groupID.x].accelY[threadID.x], ReadBuf[groupID.x].accelZ[threadID.x]);
+		float3 velocity = float3(ReadBuf[groupID.x].velX[threadID.x], ReadBuf[groupID.x].velY[threadID.x], ReadBuf[groupID.x].velZ[threadID.x]);
+		float3 position = float3(ReadBuf[groupID.x].posX[threadID.x], ReadBuf[groupID.x].posY[threadID.x], ReadBuf[groupID.x].posZ[threadID.x]);
+
+		//Get the hook position. This is either the anchor or the previous body.
+		float3 hook = Varying[groupID.x].anchor;
+		if (threadID.x != 0)
+		{
+			hook = float3(ReadBuf[groupID.x].posX[threadID.x - 1], ReadBuf[groupID.x].posY[threadID.x - 1], ReadBuf[groupID.x].posZ[threadID.x - 1]);
+		}
+
+		//Calculate what the position would be at the next time step based on the current information.
+		//This is precalculated so the force is based on the next position for better accuracy and precision.
+		float3 precalcPos = position + 0.5f * acceleration * (TimeDelta * TimeDelta) + velocity * TimeDelta;
+
+		//The displacement of the spring from its root position (how much it has stretched or compressed)
+		float3 displacement = precalcPos - hook;
+
+		//Get the direction vector of the displacement and multiply it by the spring length to get the spring vector
+		float3 direction = (length(displacement) > 0) ? normalize(displacement) : float3(0, 0, 0);
+		float3 springDisplacement = direction * SpringLength;
+
+		//Get the difference in length between the displacement and spring displacement. 
+		//We do this to adjust the resting position to the spring length.
+		float3 differenceInLength = length(displacement) - length(springDisplacement);
+
+		//The total force is calculated by adding the objects relative gravity with a spring force on the object.
+		//A spring is calculated by taking a negative spring constant (in opposite direction of force) and multiplying it by the displacement of the spring.
+		//Add a dampening effect by subtracting the initial velocity multiplied by the damper
+		float3 totalForce = Gravity * Mass - Stiffness * (direction * differenceInLength);
+		totalForce -= Dampening * velocity;
+
+		//Solve for acceleration (F=MA), velocity (V=AT), and position (d = vt + (1/2)at^2)
+		acceleration = totalForce / Mass;
+		velocity += acceleration * TimeDelta;
+		position += 0.5f * acceleration * (TimeDelta * TimeDelta) + velocity * TimeDelta;
+
+		//Copy final acceleration, velocity, and position values to the write buffer.
+		WriteBuf[groupID.x].accelX[threadID.x] = acceleration.x;
+		WriteBuf[groupID.x].accelY[threadID.x] = acceleration.y;
+		WriteBuf[groupID.x].accelZ[threadID.x] = acceleration.z;
+		WriteBuf[groupID.x].velX[threadID.x] = velocity.x;
+		WriteBuf[groupID.x].velY[threadID.x] = velocity.y;
+		WriteBuf[groupID.x].velZ[threadID.x] = velocity.z;
+		WriteBuf[groupID.x].posX[threadID.x] = position.x;
+		WriteBuf[groupID.x].posY[threadID.x] = position.y;
+		WriteBuf[groupID.x].posZ[threadID.x] = position.z;
+	}
+	
+}
